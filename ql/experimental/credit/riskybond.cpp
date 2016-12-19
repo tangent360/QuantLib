@@ -41,14 +41,12 @@ namespace QuantLib {
     void RiskyBond::performCalculations() const {
         NPV_ = 0;
         Date today = Settings::instance().evaluationDate();
-        // only forward pricing
-        QL_REQUIRE(npvDate_ >= today, "Incorrect npv date");
         std::vector<boost::shared_ptr<CashFlow> > cf = cashflows();
         Date d1 = effectiveDate();
         for (Size i = 0; i < cf.size(); i++) {
             Date d2 = cf[i]->date();
-            if (d2 > npvDate_) {
-                d1 = max(npvDate_ , d1);
+            if (d2 > today) {
+                d1 = max(today , d1);
                 Date defaultDate = d1 + (d2-d1)/2;
 
                 Real coupon = cf[i]->amount()
@@ -61,18 +59,15 @@ namespace QuantLib {
             }
             d1 = d2;
         }
-        valuationDate_ = npvDate_;
     }
 
     Real RiskyBond::riskfreeNPV() const {
         Date today = Settings::instance().evaluationDate();
-        // only forward pricing
-        QL_REQUIRE(npvDate_ >= today, "Incorrect npv date");
         Real npv = 0;
         std::vector<boost::shared_ptr<CashFlow> > cf = cashflows();
         for (Size i = 0; i < cf.size(); i++) {
             Date d2 = cf[i]->date();
-            if (d2 > npvDate_)
+            if (d2 > today)
                 npv += cf[i]->amount() * yieldTS()->discount(d2);
         }
         return npv;
@@ -80,12 +75,10 @@ namespace QuantLib {
 
     Real RiskyBond::totalFutureFlows() const {
         Date today = Settings::instance().evaluationDate();
-        // only forward pricing
-        QL_REQUIRE(npvDate_ >= today, "Incorrect npv date");
         Real flow = 0;
         std::vector<boost::shared_ptr<CashFlow> > cf = cashflows();
         for (Size i = 0; i < cf.size(); i++) {
-            if (cf[i]->date() > npvDate_)
+            if (cf[i]->date() > today)
                 flow += cf[i]->amount();
         }
         return flow;
@@ -95,13 +88,11 @@ namespace QuantLib {
         std::vector<boost::shared_ptr<CashFlow> > expected;
         std::vector<boost::shared_ptr<CashFlow> > cf = cashflows();
         Date today = Settings::instance().evaluationDate();
-        // only forward pricing
-        QL_REQUIRE(npvDate_ >= today, "Incorrect npv date");
         Date d1 = effectiveDate();
         for (Size i = 0; i < cf.size(); i++) {
             Date d2 = cf[i]->date();
-            if (d2 > npvDate_) {
-                d1 = max(npvDate_ , d1);
+            if (d2 > today) {
+                d1 = max(today , d1);
                 Date defaultDate = d1 + (d2-d1)/2;
 
                 Real coupon = cf[i]->amount()
@@ -133,9 +124,8 @@ namespace QuantLib {
                             DayCounter dayCounter,
                             BusinessDayConvention paymentConvention,
                             std::vector<Real> notionals,
-                            Handle<YieldTermStructure> yieldTS,
-                            Date npvDate)
-    : RiskyBond(name, ccy, recoveryRate, defaultTS, yieldTS, npvDate),
+                            Handle<YieldTermStructure> yieldTS)
+    : RiskyBond(name, ccy, recoveryRate, defaultTS, yieldTS),
           schedule_(schedule),
           rate_(rate),
           dayCounter_(dayCounter),
@@ -211,9 +201,8 @@ namespace QuantLib {
                             Integer fixingDays,
                             Real spread,
                             std::vector<Real> notionals,
-                            Handle<YieldTermStructure> yieldTS,
-                            Date npvDate)
-    : RiskyBond(name, ccy, recoveryRate, defaultTS, yieldTS, npvDate),
+                            Handle<YieldTermStructure> yieldTS)
+    : RiskyBond(name, ccy, recoveryRate, defaultTS, yieldTS),
           schedule_(schedule),
           index_(index),
           fixingDays_(fixingDays),

@@ -26,7 +26,6 @@
 #include <ql/termstructures/yieldtermstructure.hpp>
 #include <ql/termstructures/credit/flathazardrate.hpp>
 #include <ql/pricingengines/credit/midpointcdsengine.hpp>
-#include <ql/pricingengines/credit/isdacdsengine.hpp>
 #include <ql/quotes/simplequote.hpp>
 #include <ql/math/solvers1d/brent.hpp>
 #include <ql/time/calendars/weekendsonly.hpp>
@@ -42,48 +41,23 @@ namespace QuantLib {
                                          bool settlesAccrual,
                                          bool paysAtDefaultTime,
                                          const Date& protectionStart,
-                                         const boost::shared_ptr<Claim>& claim,
-                                         const DayCounter& lastPeriodDayCounter,
-                                         const bool rebatesAccrual)
+                                         const boost::shared_ptr<Claim>& claim)
     : side_(side), notional_(notional), upfront_(boost::none),
       runningSpread_(spread), settlesAccrual_(settlesAccrual),
       paysAtDefaultTime_(paysAtDefaultTime), claim_(claim),
       protectionStart_(protectionStart == Null<Date>() ? schedule[0] :
                                                          protectionStart) {
-        QL_REQUIRE((protectionStart_ <= schedule[0])
-            || (schedule.rule() == DateGeneration::CDS),
+        QL_REQUIRE(protectionStart_ <= schedule[0],
                    "protection can not start after accrual");
-
         leg_ = FixedRateLeg(schedule)
             .withNotionals(notional)
             .withCouponRates(spread, dayCounter)
-            .withPaymentAdjustment(convention)
-            .withLastPeriodDayCounter(lastPeriodDayCounter);
-
-        if(rebatesAccrual) {
-            boost::shared_ptr<FixedRateCoupon> firstCoupon =
-                boost::dynamic_pointer_cast<FixedRateCoupon>(leg_[0]);
-            // adjust to T+3 standard settlement, alternatively add
-            // an arbitrary date to the constructor
-
-            // standard date. Notice that protection start is already adjusted
-            //  to T+1
-            Date rebateDate = schedule.calendar().advance(
-                schedule.calendar().adjust(protectionStart_, convention), 2,
-                Days, convention);
-
-            accrualRebate_.reset(new SimpleCashFlow(
-                firstCoupon->accruedAmount(protectionStart_),
-                rebateDate));
-        }
+            .withPaymentAdjustment(convention);
+        upfrontPayment_.reset(new SimpleCashFlow(0.0, schedule[0]));
 
         if (!claim_)
             claim_ = boost::shared_ptr<Claim>(new FaceValueClaim);
         registerWith(claim_);
-        // the upfront payment left intentionally unitialized to indicate
-        //  this CDS has none.
-
-        maturity_ = schedule.dates().back();
     }
 
     CreditDefaultSwap::CreditDefaultSwap(Protection::Side side,
@@ -97,56 +71,26 @@ namespace QuantLib {
                                          bool paysAtDefaultTime,
                                          const Date& protectionStart,
                                          const Date& upfrontDate,
-                                         const boost::shared_ptr<Claim>& claim,
-                                         const DayCounter& lastPeriodDayCounter,
-                                         const bool rebatesAccrual)
+                                         const boost::shared_ptr<Claim>& claim)
     : side_(side), notional_(notional), upfront_(upfront),
       runningSpread_(runningSpread), settlesAccrual_(settlesAccrual),
       paysAtDefaultTime_(paysAtDefaultTime), claim_(claim),
       protectionStart_(protectionStart == Null<Date>() ? schedule[0] :
                                                          protectionStart) {
-        QL_REQUIRE((protectionStart_ <= schedule[0])
-            || (schedule.rule() == DateGeneration::CDS),
+        QL_REQUIRE(protectionStart_ <= schedule[0],
                    "protection can not start after accrual");
-
         leg_ = FixedRateLeg(schedule)
             .withNotionals(notional)
             .withCouponRates(runningSpread, dayCounter)
-            .withPaymentAdjustment(convention)
-            .withLastPeriodDayCounter(lastPeriodDayCounter);
-
-        // If empty, adjust to T+3 standard settlement, alternatively add
-        //  an arbitrary date to the constructor
-        Date effectiveUpfrontDate = upfrontDate == Null<Date>() ?
-            schedule.calendar().advance(
-            schedule.calendar().adjust(protectionStart_, convention),
-            2, Days, convention) : upfrontDate;
-        // '2' is used above since the protection start is assumed to be
-        //   on trade_date + 1
-        upfrontPayment_.reset(new SimpleCashFlow(notional*upfront,
-            effectiveUpfrontDate));
-
-        QL_REQUIRE(effectiveUpfrontDate >= protectionStart_,
+            .withPaymentAdjustment(convention);
+        Date d = upfrontDate == Null<Date>() ? schedule[0] : upfrontDate;
+        upfrontPayment_.reset(new SimpleCashFlow(notional*upfront, d));
+        QL_REQUIRE(upfrontPayment_->date() >= protectionStart_,
                    "upfront can not be due before contract start");
-
-        if(rebatesAccrual) {
-            boost::shared_ptr<FixedRateCoupon> firstCoupon =
-                boost::dynamic_pointer_cast<FixedRateCoupon>(leg_[0]);
-            // adjust to T+3 standard settlement, alternatively add
-            //  an arbitrary date to the constructor
-
-            const Date& rebateDate = effectiveUpfrontDate;
-
-            accrualRebate_.reset(new SimpleCashFlow(
-                firstCoupon->accruedAmount(protectionStart_),
-                rebateDate));
-        }
 
         if (!claim_)
             claim_ = boost::shared_ptr<Claim>(new FaceValueClaim);
         registerWith(claim_);
-
-        maturity_ = schedule.dates().back();
     }
 
     Protection::Side CreditDefaultSwap::side() const {
@@ -204,14 +148,12 @@ namespace QuantLib {
         arguments->notional = notional_;
         arguments->leg = leg_;
         arguments->upfrontPayment = upfrontPayment_;
-        arguments->accrualRebate = accrualRebate_;
         arguments->settlesAccrual = settlesAccrual_;
         arguments->paysAtDefaultTime = paysAtDefaultTime_;
         arguments->claim = claim_;
         arguments->upfront = upfront_;
         arguments->spread = runningSpread_;
         arguments->protectionStart = protectionStart_;
-        arguments->maturity = maturity_;
     }
 
 
@@ -230,7 +172,6 @@ namespace QuantLib {
         defaultLegNPV_ = results->defaultLegNPV;
         upfrontNPV_ = results->upfrontNPV;
         upfrontBPS_ = results->upfrontBPS;
-        accrualRebateNPV_ = results->accrualRebateNPV;
     }
 
     Rate CreditDefaultSwap::fairUpfront() const {
@@ -282,12 +223,6 @@ namespace QuantLib {
         return upfrontBPS_;
     }
 
-    Real CreditDefaultSwap::accrualRebateNPV() const {
-        calculate();
-        QL_REQUIRE(accrualRebateNPV_ != Null<Real>(),
-                   "accrual Rebate NPV not available");
-        return accrualRebateNPV_;
-    }
 
     namespace {
 
@@ -301,7 +236,7 @@ namespace QuantLib {
               engine_(engine), results_(results) {}
 
             Real operator()(Real guess) const {
-                quote_.setValue(std::exp(guess));
+                quote_.setValue(guess);
                 engine_.calculate();
                 return results_->value - target_;
             }
@@ -319,8 +254,7 @@ namespace QuantLib {
                                const Handle<YieldTermStructure>& discountCurve,
                                const DayCounter& dayCounter,
                                Real recoveryRate,
-                               Real accuracy,
-                               bool useIsdaEngine) const {
+                               Real accuracy) const {
 
         boost::shared_ptr<SimpleQuote> flatRate(new SimpleQuote(0.0));
 
@@ -329,67 +263,41 @@ namespace QuantLib {
                 FlatHazardRate(0, WeekendsOnly(),
                                Handle<Quote>(flatRate), dayCounter)));
 
-        boost::shared_ptr<PricingEngine> engine;
-        if(useIsdaEngine) {
-            engine.reset(new IsdaCdsEngine(
-                             probability, recoveryRate, discountCurve,
-                             boost::none,
-                             IsdaCdsEngine::Taylor,
-                             IsdaCdsEngine::HalfDayBias,
-                             IsdaCdsEngine::Piecewise));
-        } else {
-            engine.reset(new MidPointCdsEngine(
-                        probability, recoveryRate, discountCurve));
-        }
-        setupArguments(engine->getArguments());
+        MidPointCdsEngine engine(probability, recoveryRate, discountCurve);
+        setupArguments(engine.getArguments());
         const CreditDefaultSwap::results* results =
             dynamic_cast<const CreditDefaultSwap::results*>(
-                engine->getResults());
+                                                       engine.getResults());
 
-        ObjectiveFunction f(targetNPV, *flatRate, *engine, results);
-        //very close guess if targetNPV = 0.
-        Rate guess = std::log(runningSpread_ / (1 - recoveryRate) * 365./360.);
-        Real step = 0.2; //multiplicative step, equivalent to exp(0.2) factor
-        return std::exp(Brent().solve(f, accuracy, guess, step));
+        ObjectiveFunction f(targetNPV, *flatRate, engine, results);
+        Rate guess = 0.001;
+        Rate step = guess*0.1;
+
+        return Brent().solve(f, accuracy, guess, step);
     }
 
 
     Rate CreditDefaultSwap::conventionalSpread(
                               Real conventionalRecovery,
                               const Handle<YieldTermStructure>& discountCurve,
-                              const DayCounter& dayCounter,
-                              bool useIsdaEngine) const {
-
-        boost::shared_ptr<SimpleQuote> flatRate(new SimpleQuote(0.0));
+                              const DayCounter& dayCounter) const {
+        Rate flatHazardRate = impliedHazardRate(0.0,
+                                                discountCurve,
+                                                dayCounter,
+                                                conventionalRecovery);
 
         Handle<DefaultProbabilityTermStructure> probability(
-            boost::shared_ptr<DefaultProbabilityTermStructure>(new
-                FlatHazardRate(0, WeekendsOnly(),
-                               Handle<Quote>(flatRate), dayCounter)));
+            boost::shared_ptr<DefaultProbabilityTermStructure>(
+                             new FlatHazardRate(0, WeekendsOnly(),
+                                                flatHazardRate, dayCounter)));
 
-        boost::shared_ptr<PricingEngine> engine;
-        if(useIsdaEngine) {
-            engine.reset(new IsdaCdsEngine(
-                             probability, conventionalRecovery, discountCurve,
-                             boost::none,
-                             IsdaCdsEngine::Taylor,
-                             IsdaCdsEngine::HalfDayBias,
-                             IsdaCdsEngine::Piecewise));
-        } else {
-            engine.reset(new MidPointCdsEngine(
-                             probability, conventionalRecovery, discountCurve));
-        }
-
-        setupArguments(engine->getArguments());
+        MidPointCdsEngine engine(probability, conventionalRecovery,
+                                 discountCurve, true);
+        setupArguments(engine.getArguments());
+        engine.calculate();
         const CreditDefaultSwap::results* results =
             dynamic_cast<const CreditDefaultSwap::results*>(
-                                                       engine->getResults());
-
-        ObjectiveFunction f(0., *flatRate, *engine, results);
-        Rate guess = std::log(runningSpread_ / (1 - conventionalRecovery) * 365./360.);
-        Real step = 0.2; //multiplicative step, equivalent to exp(0.2) factor
-
-        Brent().solve(f, 1e-8, guess, step);
+                                                       engine.getResults());
         return results->fairSpread;
     }
 
@@ -414,12 +322,10 @@ namespace QuantLib {
         QL_REQUIRE(notional != 0.0, "null notional set");
         QL_REQUIRE(spread != Null<Rate>(), "spread not set");
         QL_REQUIRE(!leg.empty(), "coupons not set");
-        // could be empty to indicate theres no flow:
+        QL_REQUIRE(upfrontPayment, "upfront payment not set");
         QL_REQUIRE(claim, "claim not set");
         QL_REQUIRE(protectionStart != Null<Date>(),
                    "protection start date not set");
-        QL_REQUIRE(maturity != Null<Date>(),
-                   "maturity date not set");
     }
 
     void CreditDefaultSwap::results::reset() {
@@ -431,7 +337,6 @@ namespace QuantLib {
         defaultLegNPV = Null<Real>();
         upfrontBPS = Null<Real>();
         upfrontNPV = Null<Real>();
-        accrualRebateNPV = Null<Real>();
     }
 
 }

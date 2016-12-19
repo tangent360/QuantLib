@@ -213,14 +213,8 @@ namespace QuantLib {
 
     template <class C, class I, template <class> class B>
     inline void PiecewiseDefaultCurve<C,I,B>::update() {
-        // it dispatches notifications only if (!calculated_ && !frozen_)
+        base_curve::update();
         LazyObject::update();
-
-        // do not use base_curve::update() as it would always notify observers
-
-        // TermStructure::update() update part
-        if (this->moving_)
-            this->updated_ = false;
     }
 
     template <class C, class I, template <class> class B>

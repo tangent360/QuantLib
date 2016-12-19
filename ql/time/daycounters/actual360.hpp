@@ -37,26 +37,19 @@ namespace QuantLib {
     class Actual360 : public DayCounter {
       private:
         class Impl : public DayCounter::Impl {
-		  private:
-			  bool includeLastDay_;
           public:
-		    Impl(const bool includeLastDay) : includeLastDay_(includeLastDay) {}
-            std::string name() const { return includeLastDay_ ? 
-                std::string("Actual/360 (inc)") : std::string("Actual/360"); }
-			BigInteger dayCount(const Date& d1, const Date& d2) const { 
-                return DayCounter::Impl::dayCount(d1,d2) + 
-                    (includeLastDay_ ? 1 : 0); }
+            std::string name() const { return std::string("Actual/360"); }
             Time yearFraction(const Date& d1,
                               const Date& d2,
                               const Date&,
                               const Date&) const {
-                return Time(dayCount(d1,d2))/360.0;
+                return daysBetween(d1,d2)/360.0;
             }
         };
       public:
-        Actual360(const bool includeLastDay = false )
+        Actual360()
         : DayCounter(boost::shared_ptr<DayCounter::Impl>(
-            new Actual360::Impl(includeLastDay))) {}
+                                                      new Actual360::Impl)) {}
     };
 
 }
